@@ -69,15 +69,7 @@ class CrossAttention3D(nn.Module):
         self.v = nn.Linear(dim, dim)
         self.out = nn.Linear(dim, dim)
 
-        self.conv3D = nn.Conv3d(kernel_size=1)
-
-
     def forward(self, x_dec, x_enc):
-        x_cat = torch.cat([x_dec, x_enc], dim=1)
-        x_conv = self.conv3D(x_cat)
-
-
-
         Q = self.q(x_dec)  # Eq.(10)
         K = self.k(x_enc)  # Eq.(9)
         V = self.v(x_enc)

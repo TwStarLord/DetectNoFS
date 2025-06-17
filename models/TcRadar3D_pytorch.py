@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from einops import rearrange, einsum
+from unfoldNd import UnfoldNd
 
 from models.TcRadar3D import CrossAttention3D
 
@@ -28,6 +29,7 @@ class FeedForward(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+
 def create_mask(window_size, displacement, upper_lower, left_right):
     mask = torch.zeros(window_size ** 2, window_size ** 2)
 
@@ -43,6 +45,7 @@ def create_mask(window_size, displacement, upper_lower, left_right):
 
     return mask
 
+
 class CyclicShift(nn.Module):
     def __init__(self, displacement):
         super().__init__()
@@ -51,10 +54,12 @@ class CyclicShift(nn.Module):
     def forward(self, x):
         return torch.roll(x, shifts=(self.displacement, self.displacement), dims=(1, 2))
 
+
 def get_relative_distances(window_size):
-    indices = torch.tensor(np.array([[x, y] for x in range(window_size) for y in range(window_size)]),dtype=torch.long)
+    indices = torch.tensor(np.array([[x, y] for x in range(window_size) for y in range(window_size)]), dtype=torch.long)
     distances = indices[None, :, :] - indices[:, None, :]
     return distances
+
 
 class Residual(nn.Module):
     def __init__(self, fn):
@@ -63,6 +68,7 @@ class Residual(nn.Module):
 
     def forward(self, x, **kwargs):
         return self.fn(x, **kwargs) + x
+
 
 class WindowAttention(nn.Module):
     def __init__(self, dim, heads, head_dim, shifted, window_size, relative_pos_embedding):
@@ -108,7 +114,7 @@ class WindowAttention(nn.Module):
             lambda t: rearrange(t, 'b (nw_h w_h) (nw_w w_w) (h d) -> b h (nw_h nw_w) (w_h w_w) d',
                                 h=h, w_h=self.window_size, w_w=self.window_size), qkv)
 
-        dots = einsum('b h w i d, b h w j d -> b h w i j', q, k) * self.scale
+        dots = einsum(q, k,'b h w i d, b h w j d -> b h w i j') * self.scale
 
         if self.relative_pos_embedding:
             dots += self.pos_embedding[self.relative_indices[:, :, 0], self.relative_indices[:, :, 1]]
@@ -121,7 +127,7 @@ class WindowAttention(nn.Module):
 
         attn = dots.softmax(dim=-1)
 
-        out = einsum('b h w i j, b h w j d -> b h w i d', attn, v)
+        out = einsum(attn, v,'b h w i j, b h w j d -> b h w i d')
         out = rearrange(out, 'b h (nw_h nw_w) (w_h w_w) d -> b (nw_h w_h) (nw_w w_w) (h d)',
                         h=h, w_h=self.window_size, w_w=self.window_size, nw_h=nw_h, nw_w=nw_w)
         out = self.to_out(out)
@@ -129,6 +135,7 @@ class WindowAttention(nn.Module):
         if self.shifted:
             out = self.cyclic_back_shift(out)
         return out
+
 
 class SwinBlock(nn.Module):
     def __init__(self, dim, heads, head_dim, mlp_dim, shifted, window_size, relative_pos_embedding):
@@ -147,29 +154,85 @@ class SwinBlock(nn.Module):
         return x
 
 
+
+
 class PatchMerging(nn.Module):
-    def __init__(self, in_channels, out_channels, downscaling_factor):
+    def __init__(self, in_channels, out_channels, downscaling_factor,stage):
         super().__init__()
         self.downscaling_factor = downscaling_factor
-        self.patch_merge = nn.Unfold(kernel_size=downscaling_factor, stride=downscaling_factor, padding=0)
+        self.stage = stage
+        # TODO 四维采样，需要使用额外的库，后续学习
+        # self.patch_merge = nn.Unfold(kernel_size=downscaling_factor, stride=downscaling_factor, padding=0)
         self.linear = nn.Linear(in_channels * downscaling_factor ** 2, out_channels)
 
-    def forward(self, x):
-        b, c, h, w = x.shape
-        new_h, new_w = h // self.downscaling_factor, w // self.downscaling_factor
-        x = self.patch_merge(x).view(b, -1, new_h, new_w).permute(0, 2, 3, 1)
-        x = self.linear(x)
+    def forward(self, x,):
+        assert self.stage in list(range(1, 4)),'stage should be in [1,2,3]'
+        if self.stage == 1:
+            x = self.stage1_patch_emb(x)
+        elif self.stage == 2:
+            x = self.stage2_patch_merge(x)
+        elif self.stage == 3:
+            x = self.stage3_patch_merge(x)
         return x
+        # b, c, h, w = x.shape
+        # new_h, new_w = h // self.downscaling_factor, w // self.downscaling_factor
+        # x = self.patch_merge(x).view(b, -1, new_h, new_w).permute(0, 2, 3, 1)
+        # x = self.linear(x)
+        # return x
+
+    @staticmethod
+    def stage1_patch_emb(x: torch.Tensor):
+        B, C, D, H, W = x.shape
+        unfold3d = UnfoldNd(kernel_size=(2, 2, 2), stride=(2, 2, 2))
+        patches = unfold3d(x)  # (B, C·8, L)
+        patches = patches.view(B, C, 2, 2, 2, -1)  # (B,C,2,2,2,L)
+        x1 = patches.mean(dim=(2, 3, 4))  # (B,C,L)
+        D1, H1, W1 = D // 2, H // 2, W // 2
+        return x1.view(B, C, D1, H1, W1)
+
+    @staticmethod
+    def stage2_patch_merge(x1: torch.Tensor):
+        # x1: (B,C,D/2,H/2,W/2)
+        B, C, D1, H1, W1 = x1.shape
+        # 2.1 再次下采样
+        unfold3d = UnfoldNd(kernel_size=(2, 2, 2), stride=(2, 2, 2))
+        patches = unfold3d(x1)  # (B, C·8, L')
+        patches = patches.view(B, C, 2, 2, 2, -1)  # (B,C,2,2,2,L')
+        x2_prime = patches.mean(dim=(2, 3, 4))  # (B,C,L')
+        D2, H2, W2 = D1 // 2, H1 // 2, W1 // 2
+        x2_prime = x2_prime.view(B, C, D2, H2, W2)  # (B,C,D/4,H/4,W/4)
+
+        # 2.2 通道拼接
+        x2 = torch.cat([x2_prime, x2_prime], dim=1)  # (B,2C,D/4,H/4,W/4)
+        return x2
+
+    @staticmethod
+    def satge3_patch_merge(x2: torch.Tensor):
+        # x2: (B,2C,D2,H2,W2)
+        B, C2, D2, H2, W2 = x2.shape  # C2 = 2C
+        # 3.1 合并 D 到通道
+        x_flat = x2.reshape(B, C2 * D2, H2, W2)
+        # 3.2 用 nn.Unfold 在 H,W 维度下采样
+        unfold2d = torch.nn.Unfold(kernel_size=2, stride=2)
+        patches = unfold2d(x_flat)  # (B, C2*D2*4, L'')
+        # 3.3 重组并平均
+        patches = patches.view(B, C2, D2, 2, 2, -1)  # (B,2C,D2,2,2,L'')
+        x3_prime = patches.mean(dim=(3, 4))  # (B,2C,D2,L'')
+        H3, W3 = H2 // 2, W2 // 2
+        x3_prime = x3_prime.view(B, C2, D2, H3, W3)  # (B,2C,D/4,H/8,W/8)
+
+        # 3.4 通道再拼接
+        x3 = torch.cat([x3_prime, x3_prime], dim=1)  # (B,4C,D/4,H/8,W/8)
+        return x3
 
 
 class StageModule(nn.Module):
     def __init__(self, in_channels, hidden_dimension, layers, downscaling_factor, num_heads, head_dim, window_size,
-                 relative_pos_embedding):
+                 relative_pos_embedding,stage):
         super().__init__()
         assert layers % 2 == 0, 'Stage layers need to be divisible by 2 for regular and shifted block.'
 
-        self.patch_partition = PatchMerging(in_channels=in_channels, out_channels=hidden_dimension,
-                                            downscaling_factor=downscaling_factor)
+        self.patch_partition = PatchMerging(in_channels=in_channels, out_channels=hidden_dimension,downscaling_factor=downscaling_factor, stage=stage)
 
         self.layers = nn.ModuleList([])
         for _ in range(layers // 2):
@@ -186,6 +249,7 @@ class StageModule(nn.Module):
             x = regular_block(x)
             x = shifted_block(x)
         return x.permute(0, 3, 1, 2)
+
 
 # ==================== DIFB3D Implementation ====================
 # Ref: Section 3.2, Eq.(2)-(5), Table 1
@@ -253,7 +317,8 @@ class TC_Radar(nn.Module):
             num_heads=heads[0],
             head_dim=head_dim,
             window_size=window_size,
-            relative_pos_embedding=True
+            relative_pos_embedding=True,
+            stage=1
         )
         self.trm2 = StageModule(
             in_channels=hidden_dim,
@@ -263,7 +328,8 @@ class TC_Radar(nn.Module):
             num_heads=heads[1],
             head_dim=head_dim,
             window_size=window_size,
-            relative_pos_embedding=True
+            relative_pos_embedding=True,
+            stage=2
         )
         self.trm3 = StageModule(
             in_channels=hidden_dim * 2,
@@ -273,7 +339,8 @@ class TC_Radar(nn.Module):
             num_heads=heads[2],
             head_dim=head_dim,
             window_size=window_size,
-            relative_pos_embedding=True
+            relative_pos_embedding=True,
+            stage=3
         )
         # DIFB and fusion
         self.difb1 = DIFB3D(hidden_dim)
@@ -307,41 +374,43 @@ class TC_Radar(nn.Module):
         self.lin1 = nn.Conv3d(hidden_dim * 2, hidden_dim, 1)
         self.classifier = nn.Conv3d(hidden_dim, num_classes, 1)
 
+
     def forward(self, x):
         # x: (B, C, D,H, W)
         B, C, D, H, W = x.shape
         # Encoder start
         # Stage1 transformer+DIFB input size：(B, C,D,H, W)；output size：(B, C,D/2,H/2, W/2)
-
-        e1 = self.trm1(x.permute(0, 2, 1, 3, 4).reshape(B * D, C, H, W))
-        d1 = self.difb1(e1.reshape(B, e1.shape[1], -1, e1.shape[2], e1.shape[3])).permute(0, 2, 1, 3, 4).reshape(B * D,
-                                                                                                                 e1.shape[
+        # t1 = self.trm1(x.permute(0, 2, 1, 3, 4).reshape(B * D, C, H, W))
+        t1 = self.trm1(x)
+        d1 = self.difb1(t1.reshape(B, t1.shape[1], -1, t1.shape[2], t1.shape[3])).permute(0, 2, 1, 3, 4).reshape(B * D,
+                                                                                                                 t1.shape[
                                                                                                                      1],
-                                                                                                                 e1.shape[
+                                                                                                                 t1.shape[
                                                                                                                      2],
-                                                                                                                 e1.shape[
+                                                                                                                 t1.shape[
                                                                                                                      3])
-        enc1 = self.lamuda1 * d1 + (1 - self.lamuda1) * e1
+        enc1 = self.lamuda1 * d1 + (1 - self.lamuda1) * t1
+        assert 1==0,'err'
         # Stage2 transformer+DIFB input size：(B, C,D,H, W)；output size：(B, 2C,D/4,H/4, W/4)
-        e2 = self.trm2(enc1)
-        d2 = self.difb2(e2.reshape(B, e2.shape[1], -1, e2.shape[2], e2.shape[3])).permute(0, 2, 1, 3, 4).reshape(B * D,
-                                                                                                                 e2.shape[
+        t2 = self.trm2(enc1)
+        d2 = self.difb2(t2.reshape(B, t2.shape[1], -1, t2.shape[2], t2.shape[3])).permute(0, 2, 1, 3, 4).reshape(B * D,
+                                                                                                                 t2.shape[
                                                                                                                      1],
-                                                                                                                 e2.shape[
+                                                                                                                 t2.shape[
                                                                                                                      2],
-                                                                                                                 e2.shape[
+                                                                                                                 t2.shape[
                                                                                                                      3])
-        enc2 = self.lamuda2 * d2 + (1 - self.lamuda2) * e2
+        enc2 = self.lamuda2 * d2 + (1 - self.lamuda2) * t2
         # Stage3 transformer+DIFB input size：(B, C,D,H, W)；output size：(B, 4C,D/4,H/8, W/8)
-        e3 = self.trm3(enc2)
-        d3 = self.difb3(e3.reshape(B, e3.shape[1], -1, e3.shape[2], e3.shape[3])).permute(0, 2, 1, 3, 4).reshape(B * D,
-                                                                                                                 e3.shape[
+        t3 = self.trm3(enc2)
+        d3 = self.difb3(t3.reshape(B, t3.shape[1], -1, t3.shape[2], t3.shape[3])).permute(0, 2, 1, 3, 4).reshape(B * D,
+                                                                                                                 t3.shape[
                                                                                                                      1],
-                                                                                                                 e3.shape[
+                                                                                                                 t3.shape[
                                                                                                                      2],
-                                                                                                                 e3.shape[
+                                                                                                                 t3.shape[
                                                                                                                      3])
-        enc3 = self.lamuda3 * d3 + (1 - self.lamuda3) * e3
+        enc3 = self.lamuda3 * d3 + (1 - self.lamuda3) * t3
         # Encoder end
 
         # Decoder
