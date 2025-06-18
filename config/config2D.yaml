@@ -1,0 +1,22 @@
+utils:
+  ca:
+    MutilHeadCrossAttentionBlock: "MutilHeadCrossAttentionBlockV1"
+    MutilHeadSelfAttentionBlock: "MutilHeadSelfAttentionBlockV1"
+  cls_head:
+    GeMClassifier: "GeMClassifier"
+    LiteTransformerPoolCls: "LiteTransformerPoolCls"
+    MixPoolClassifier: "MixPoolClassifier"
+    PatchTransformerPoolCls: "PatchTransformerPoolCls"
+    SAOLPoolCls: "SAOLPoolCls"
+    SPPoolCls: "SPPoolCls"
+    TransformerPoolCls: "TransformerPoolCls"
+  DIFB:
+    DIFB2D_v1: "DIFB2D_v1"
+    DIFB2D: "DIFB2D"
+  feature_fusion:
+    AFFFeatureFsuion: "AFFFeatureFsuion"
+    ConvFeatureFsuion: "ConvFeatureFsuion"
+  upsample:
+    PatchExpandConvTranspose: "PatchExpandConvTranspose"
+    PatchExpandPixelShuffle: "PatchExpandPixelShuffle"
+    PatchExpandUpsample: "PatchExpandUpsample"
