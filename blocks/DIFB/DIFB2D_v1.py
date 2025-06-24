@@ -2,10 +2,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-# utils/difb/DIFB2D_v1.py
-from utils.registry import register_module
-
 # TODO DIFB内部改进，此处可以结合一维卷积块、自适应多频率通道空间注意力模块实现多维信息捕捉和总结
+
 class DIFB2D_v1(nn.Module):
     """
     该DIFB示例包含三个不同膨胀率分支，分支间信息交织后拼接降维，可直接用于增强特征。

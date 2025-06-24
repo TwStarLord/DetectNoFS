@@ -2,7 +2,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-
 class SPPoolCls(nn.Module):
     """
     空间金字塔池化(SPP, ASPP)

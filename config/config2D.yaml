@@ -1,22 +1,31 @@
-utils:
-  ca:
-    MutilHeadCrossAttentionBlock: "MutilHeadCrossAttentionBlockV1"
-    MutilHeadSelfAttentionBlock: "MutilHeadSelfAttentionBlockV1"
-  cls_head:
-    GeMClassifier: "GeMClassifier"
-    LiteTransformerPoolCls: "LiteTransformerPoolCls"
-    MixPoolClassifier: "MixPoolClassifier"
-    PatchTransformerPoolCls: "PatchTransformerPoolCls"
-    SAOLPoolCls: "SAOLPoolCls"
-    SPPoolCls: "SPPoolCls"
-    TransformerPoolCls: "TransformerPoolCls"
-  DIFB:
-    DIFB2D_v1: "DIFB2D_v1"
-    DIFB2D: "DIFB2D"
-  feature_fusion:
-    AFFFeatureFsuion: "AFFFeatureFsuion"
-    ConvFeatureFsuion: "ConvFeatureFsuion"
-  upsample:
-    PatchExpandConvTranspose: "PatchExpandConvTranspose"
-    PatchExpandPixelShuffle: "PatchExpandPixelShuffle"
-    PatchExpandUpsample: "PatchExpandUpsample"
+blocks:
+  #  ca start
+  ca: "MutilHeadCrossAttentionBlock"
+#  ca: "MutilHeadSelfAttentionBlock"
+  #  ca end
+
+  #  cls start
+  cls_head: "GeMClassifier"
+#  cls_head: "LiteTransformerPoolCls"
+#  cls_head: "MixPoolClassifier"
+#  cls_head: "PatchTransformerPoolCls"
+#  cls_head: "SAOLPoolCls"
+#  cls_head: "SPPoolCls"
+#  cls_head: "TransformerPoolCls"
+  #  cls end
+
+  #  DIFB start
+  DIFB: "DIFB2D"
+#  DIFB: "DIFB2D_v1"
+  #  DIFB end
+
+  #  feature_fusion start
+  feature_fusion: "AFFFeatureFsuion"
+#  feature_fusion: "ConvFeatureFsuion"
+  # feature_fusion end
+
+  #  upsample start
+  upsample: "PatchExpandConvTranspose"
+#  upsample: "PatchExpandPixelShuffle"
+#  upsample: "PatchExpandUpsample"
+  #  upsample end

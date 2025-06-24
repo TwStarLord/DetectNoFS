@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 
-
 class TransformerPoolCls(nn.Module):
     """
     类别Token / Transformer池化

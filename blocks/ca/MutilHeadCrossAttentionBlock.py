@@ -1,6 +1,7 @@
 from torch import nn
 
 
+
 class MutilHeadCrossAttentionBlock(nn.Module):
     """
     多头注意力实现交叉注意力

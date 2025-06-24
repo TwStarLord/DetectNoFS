@@ -2,10 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-# utils/difb/DIFB2D_v1.py
-from utils.registry import register_module
 
-@register_module
 class DIFB2D(nn.Module):
     """Dense Information Fusion Block (2D 卷积版)"""
 

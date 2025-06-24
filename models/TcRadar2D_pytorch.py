@@ -1,23 +1,20 @@
 import torch
 from torch import nn, einsum
 import numpy as np
-from einops import rearrange, repeat
+from einops import rearrange
 import torch.nn.functional as F
 
-from utils.DIFB.DIFB2D import DIFB2D, DIFB2D_v1
-from utils.ca.MutilHeadCrossAttentionBlock import MutilHeadCrossAttentionBlock
-from utils.cls_head.GeMClassifier import GeMClassifier
-from utils.cls_head.LiteTransformerPoolCls import LiteTransformerPoolCls
-from utils.cls_head.MixPoolClassifier import MixPoolClassifier
-from utils.cls_head.PatchTransformerPoolCls import PatchTransformerPoolCls
-from utils.cls_head.SAOLPoolCls import SAOLPoolCls
-from utils.cls_head.SPPoolCls import SPPoolCls
-from utils.cls_head.TransformerPoolCls import TransformerPoolCls
-from utils.feature_fusion.AFFFeatureFsuion import AFFFeatureFusion
-from utils.feature_fusion.ConvFeatureFsuion import ConvFeatureFusion
-from utils.upsample.PatchExpandConvTranspose import PatchExpandConvTranspose
-from utils.upsample.PatchExpandPixelShuffle import PatchExpandPixelShuffle
-from utils.upsample.PatchExpandUpsample import PatchExpandUpsample
+from blocks.DIFB.DIFB2D import DIFB2D, DIFB2D_v1
+from blocks.ca.MutilHeadCrossAttentionBlock import MutilHeadCrossAttentionBlock
+from blocks.cls_head.GeMClassifier import GeMClassifier
+from blocks.cls_head.LiteTransformerPoolCls import LiteTransformerPoolCls
+from blocks.cls_head.MixPoolClassifier import MixPoolClassifier
+from blocks.cls_head.PatchTransformerPoolCls import PatchTransformerPoolCls
+from blocks.cls_head.SAOLPoolCls import SAOLPoolCls
+from blocks.cls_head.SPPoolCls import SPPoolCls
+from blocks.cls_head.TransformerPoolCls import TransformerPoolCls
+from blocks.feature_fusion.ConvFeatureFsuion import ConvFeatureFusion
+from blocks.upsample.PatchExpandUpsample import PatchExpandUpsample
 
 
 class CyclicShift(nn.Module):
@@ -209,9 +206,12 @@ class StageModule(nn.Module):
 
 
 class Tc_Radar2D(nn.Module):
-    def __init__(self, *, hidden_dim, layers, heads, channels=3, num_classes=5, head_dim=32, window_size=7,
+    def __init__(self, *, module_register, hidden_dim, layers, heads, channels=3, num_classes=5, head_dim=32,
+                 window_size=7,
                  downscaling_factors=(4, 2, 2, 2), relative_pos_embedding=True):
         super().__init__()
+        # 模块字典，动态构建
+        self.mreg = module_register
 
         self.en1 = StageModule(in_channels=channels, hidden_dimension=hidden_dim, layers=layers[0],
                                downscaling_factor=downscaling_factors[0], num_heads=heads[0], head_dim=head_dim,
@@ -237,66 +237,128 @@ class Tc_Radar2D(nn.Module):
         self.patch_partition4 = PatchMerging(in_channels=hidden_dim * 4, out_channels=hidden_dim * 8,
                                              downscaling_factor=downscaling_factors[3])
 
-        self.difb1 = DIFB2D(hidden_dim)
-        # self.difb2 = DIFB2D(hidden_dim * 2)
-        # self.difb3 = DIFB2D(hidden_dim * 4)
-        # self.difb4 = DIFB2D(hidden_dim * 8)
-
-        # DIFB-v1
-        self.difb1 = DIFB2D_v1(hidden_dim,hidden_dim//4)
-        self.difb2 = DIFB2D_v1(hidden_dim * 2, hidden_dim // 2)
-        self.difb3 = DIFB2D_v1(hidden_dim * 4,hidden_dim)
-        self.difb4 = DIFB2D_v1(hidden_dim * 8,hidden_dim * 2)
-
-        # self.fusion1 = AFFFeatureFusion(hidden_dim)
-        # self.fusion2 = AFFFeatureFusion(hidden_dim * 2)
-        # self.fusion3 = AFFFeatureFusion(hidden_dim * 4)
-        # self.fusion4 = AFFFeatureFusion(hidden_dim * 8)
-
-        self.fusion1 = ConvFeatureFusion(hidden_dim)
-        self.fusion2 = ConvFeatureFusion(hidden_dim * 2)
-        self.fusion3 = ConvFeatureFusion(hidden_dim * 4)
-        self.fusion4 = ConvFeatureFusion(hidden_dim * 8)
-
-        # self.mlp_head = nn.Sequential(
-        #     nn.LayerNorm(hidden_dim * 8),
-        #     nn.Linear(hidden_dim * 8, num_classes)
-        # )
-
         # self.patch3 = PatchExpandPixelShuffle(hidden_dim * 8, hidden_dim * 4, scale=2)
         # self.patch3 = PatchExpandConvTranspose(hidden_dim * 8, hidden_dim * 4, scale=2)
-        self.patch3 = PatchExpandUpsample(hidden_dim * 8, hidden_dim * 4, scale=2)
 
         self.ca3 = MutilHeadCrossAttentionBlock(hidden_dim * 4, hidden_dim * 4, embed_dim=hidden_dim * 4, num_heads=4)
         self.conv3 = nn.Conv2d(hidden_dim * 4, hidden_dim * 4, 3, padding=1)
 
         # self.patch2 = PatchExpandPixelShuffle(hidden_dim * 4, hidden_dim * 2, scale=2)
         # self.patch2 = PatchExpandConvTranspose(hidden_dim * 4, hidden_dim * 2, scale=2)
-        self.patch2 = PatchExpandUpsample(hidden_dim * 4, hidden_dim * 2, scale=2)
 
         self.ca2 = MutilHeadCrossAttentionBlock(hidden_dim * 2, hidden_dim * 2, embed_dim=hidden_dim * 2, num_heads=4)
         self.conv2 = nn.Conv2d(hidden_dim * 2, hidden_dim * 2, 3, padding=1)
 
         # self.patch1 = PatchExpandPixelShuffle(hidden_dim * 2, hidden_dim, scale=2)
         # self.patch1 = PatchExpandConvTranspose(hidden_dim * 2, hidden_dim, scale=2)
-        self.patch1 = PatchExpandUpsample(hidden_dim * 2, hidden_dim, scale=2)
 
-        self.ca1 = MutilHeadCrossAttentionBlock(hidden_dim, hidden_dim, embed_dim=hidden_dim, num_heads=4)
         self.conv1 = nn.Conv2d(hidden_dim, hidden_dim, 3, padding=1)
         self.final = nn.Conv2d(hidden_dim, num_classes, 1)
 
-        # TODO 不同的聚合模块
-        # 空间注意力聚合模块
-        self.saolpoolcls = SAOLPoolCls(in_channels=hidden_dim, num_classes=num_classes)
-        # 空间金字塔池化(SPP, ASPP)
-        self.sppoolcls = SPPoolCls(in_channels=hidden_dim, num_classes=num_classes)
-        # 混合池化方法(MixPool、GeM等)
-        self.mixpoolcls = MixPoolClassifier(in_channels=hidden_dim, num_classes=num_classes)
-        self.gemcls = GeMClassifier(in_channels=hidden_dim, num_classes=num_classes)
-        # 类别Token / Transformer池化
-        self.transformerpoolcls = TransformerPoolCls(in_channels=hidden_dim, num_classes=num_classes)
-        self.litetransformerpoolcls = LiteTransformerPoolCls(in_channels=hidden_dim, num_classes=num_classes)
-        self.patchtransformerpoolcls = PatchTransformerPoolCls(in_channels=hidden_dim, num_classes=num_classes)
+        # ==============================动态模块统一在此处调整 start==============================
+        # self.difb1 = DIFB2D(hidden_dim)
+        # self.difb2 = DIFB2D(hidden_dim * 2)
+        # self.difb3 = DIFB2D(hidden_dim * 4)
+        # self.difb4 = DIFB2D(hidden_dim * 8)
+
+        # # DIFB-v1
+        # self.difb1 = DIFB2D_v1(hidden_dim, hidden_dim // 4)
+        # self.difb2 = DIFB2D_v1(hidden_dim * 2, hidden_dim // 2)
+        # self.difb3 = DIFB2D_v1(hidden_dim * 4, hidden_dim)
+        # self.difb4 = DIFB2D_v1(hidden_dim * 8, hidden_dim * 2)
+
+        # 1. DIFB 模块，v1配置参考上述代码
+        self.difb1 = self.mreg.build_from_config(
+            category='DIFB',
+            hidden_dim=hidden_dim
+        )
+        self.difb2 = self.mreg.build_from_config(
+            category='DIFB',
+            hidden_dim=hidden_dim * 2
+        )
+        self.difb3 = self.mreg.build_from_config(
+            category='DIFB',
+            hidden_dim=hidden_dim * 4
+        )
+        self.difb4 = self.mreg.build_from_config(
+            category='DIFB',
+            hidden_dim=hidden_dim * 8
+        )
+
+        # 2. 特征融合模块
+        # self.fusion1 = AFFFeatureFusion(hidden_dim)
+        # self.fusion2 = AFFFeatureFusion(hidden_dim * 2)
+        # self.fusion3 = AFFFeatureFusion(hidden_dim * 4)
+        # self.fusion4 = AFFFeatureFusion(hidden_dim * 8)
+
+        # self.fusion1 = ConvFeatureFusion(hidden_dim)
+        # self.fusion2 = ConvFeatureFusion(hidden_dim * 2)
+        # self.fusion3 = ConvFeatureFusion(hidden_dim * 4)
+        # self.fusion4 = ConvFeatureFusion(hidden_dim * 8)
+
+        self.fusion1 = self.mreg.build_from_config(
+            category='feature_fusion',
+            channels=hidden_dim
+        )
+        self.fusion2 = self.mreg.build_from_config(
+            category='feature_fusion',
+            channels=hidden_dim * 2
+        )
+        self.fusion3 = self.mreg.build_from_config(
+            category='feature_fusion',
+            channels=hidden_dim * 4
+        )
+        self.fusion4 = self.mreg.build_from_config(
+            category='feature_fusion',
+            channels=hidden_dim * 8
+        )
+
+        # 3. 交叉注意力模块
+        # self.ca1 = MutilHeadCrossAttentionBlock(enc_channels=hidden_dim, dec_channels=hidden_dim, embed_dim=hidden_dim,
+        #                                         num_heads=4)
+
+        self.ca = self.mreg.build_from_config(
+            category='ca',
+            enc_channels=hidden_dim, dec_channels=hidden_dim, embed_dim=hidden_dim,
+            num_heads=4
+        )
+        # 4. 上采样模块
+        # self.patch3 = PatchExpandUpsample(in_channels= hidden_dim* 8, out_channels= hidden_dim* 4, scale=2)
+        # self.patch2 = PatchExpandUpsample(hidden_dim * 4, hidden_dim * 2, scale=2)
+        # self.patch1 = PatchExpandUpsample(hidden_dim * 2, hidden_dim, scale=2)
+
+        self.patch3 = self.mreg.build_from_config(
+            category='upsample',
+            in_channels=hidden_dim * 8, out_channels=hidden_dim * 4, scale=2
+        )
+        self.patch2 = self.mreg.build_from_config(
+            category='upsample',
+            in_channels=hidden_dim * 4, out_channels=hidden_dim * 2, scale=2
+        )
+        self.patch1 = self.mreg.build_from_config(
+            category='upsample',
+            in_channels=hidden_dim * 2, out_channels=hidden_dim, scale=2
+        )
+        # 5. 分类头
+        # # TODO 不同的聚合模块
+        # # 空间注意力聚合模块
+        # self.saolpoolcls = SAOLPoolCls(in_channels=hidden_dim, num_classes=num_classes)
+        # # 空间金字塔池化(SPP, ASPP)
+        # self.sppoolcls = SPPoolCls(in_channels=hidden_dim, num_classes=num_classes)
+        # # 混合池化方法(MixPool、GeM等)
+        # self.mixpoolcls = MixPoolClassifier(in_channels=hidden_dim, num_classes=num_classes)
+        # self.gemcls = GeMClassifier(in_channels=hidden_dim, num_classes=num_classes)
+        # # 类别Token / Transformer池化
+        # self.transformerpoolcls = TransformerPoolCls(in_channels=hidden_dim, num_classes=num_classes)
+        # self.litetransformerpoolcls = LiteTransformerPoolCls(in_channels=hidden_dim, num_classes=num_classes)
+        # self.patchtransformerpoolcls = PatchTransformerPoolCls(in_channels=hidden_dim, num_classes=num_classes)
+
+        self.cls_head = self.mreg.build_from_config(
+            category='cls_head',
+            in_channels=hidden_dim,
+            num_classes=num_classes
+        )
+        # ==============================动态模块统一在此处调整 end==============================
 
     def forward(self, img):
         # Encoder start
