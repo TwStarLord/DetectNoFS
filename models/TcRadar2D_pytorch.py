@@ -252,6 +252,7 @@ class Tc_Radar2D(nn.Module):
         # self.patch1 = PatchExpandPixelShuffle(hidden_dim * 2, hidden_dim, scale=2)
         # self.patch1 = PatchExpandConvTranspose(hidden_dim * 2, hidden_dim, scale=2)
 
+        self.ca1 = MutilHeadCrossAttentionBlock(hidden_dim, hidden_dim, embed_dim=hidden_dim, num_heads=4)
         self.conv1 = nn.Conv2d(hidden_dim, hidden_dim, 3, padding=1)
         self.final = nn.Conv2d(hidden_dim, num_classes, 1)
 
@@ -418,7 +419,9 @@ class Tc_Radar2D(nn.Module):
         # out = self.mixpoolcls(de1)
         # out = self.gemscls(de1)
         # out = self.litetransformerpoolcls(de1)
-        out = self.patchtransformerpoolcls(de1)
+        # out = self.patchtransformerpoolcls(de1)
+
+        out = self.cls_head(de1)  # [B, N_classes, H, W]
 
         # out = self.transformerpool(de1)# RAM OOM
 
