@@ -1,121 +1,184 @@
-# 1.读取config2D.yaml文件，初始化模型
-# 2.读取数据集，并划分训练集和验证集
-# 3.训练模型，并保存模型
-# 4.验证模型，并保存验证结果
-
 import os
+import ast
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split, TensorDataset
 
+from models.TcRadar2D_pytorch import Tc_Radar2D
 from utils.config_util import load_config
 from utils.register import ModuleRegister
-from models import TcRadar2D_pytorch
 
-# —— 1. 读取并解析配置文件 —— #
-config_path = 'config/config2D.yaml'
-config      = load_config(config_path)
-blocks_cfg  = config['blocks']
+# 导入绘图与评估库
+import matplotlib.pyplot as plt
+from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
 
-# —— 2. 初始化模块注册器 —— #
-mreg = ModuleRegister(blocks_cfg)
+# —— 数据加载函数 —— #
+def load_data(batch_size: int, num_classes: int):
+    dataset = TensorDataset(
+        torch.randn(100, 3, 224, 224),
+        torch.randint(0, num_classes, (100,))
+    )
+    train_size = int(0.8 * len(dataset))
+    val_size = len(dataset) - train_size
+    train_ds, val_ds = random_split(dataset, [train_size, val_size])
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=batch_size)
+    return train_loader, val_loader
 
-# —— 3. 构造模型 —— #
-#    将注册器、隐层维度和类别数一起传入，模型内部再做具体实例化
-hidden_dim  = 96
-num_classes = 5
+# —— 模型构建函数 —— #
+def build_model(mreg, model_cfg: dict, device: torch.device):
+    # 处理 YAML 中可能被解析为字符串的列表结构
+    def parse_tuple(value):
+        if isinstance(value, str):
+            return tuple(ast.literal_eval(value))
+        return tuple(value)
 
-model = TcRadar2D_pytorch(
-    module_register=mreg,
-    hidden_dim=96,
-    layers=(2, 2, 6, 2),
-    heads=(3, 6, 12, 24),
-    channels=3,
-    num_classes=5,
-    head_dim=32,
-    window_size=7,
-    downscaling_factors=(4, 2, 2, 2),
-    relative_pos_embedding=True
-).to('cuda' if torch.cuda.is_available() else 'cpu')
+    layers = parse_tuple(model_cfg['layers'])
+    heads = parse_tuple(model_cfg['heads'])
+    downscaling = parse_tuple(model_cfg['downscaling_factors'])
 
+    # 确保数值型配置正确
+    hidden_dim = int(model_cfg.get('hidden_dim', 96))
+    channels = int(model_cfg.get('channels', 3))
+    num_classes = int(model_cfg['num_classes'])
+    head_dim = int(model_cfg.get('head_dim', 32))
+    window_size = int(model_cfg.get('window_size', 7))
+    relative_pos_embedding = bool(model_cfg.get('relative_pos_embedding', True))
 
-# —— 4. 剩余的训练/验证流程与以前相同 —— #
-# （此处省略数据加载、训练循环等常规代码）
+    model = Tc_Radar2D(
+        module_register=mreg,
+        hidden_dim=hidden_dim,
+        layers=layers,
+        heads=heads,
+        channels=channels,
+        num_classes=num_classes,
+        head_dim=head_dim,
+        window_size=window_size,
+        downscaling_factors=downscaling,
+        relative_pos_embedding=relative_pos_embedding
+    ).to(device)
+    return model
 
-
-# 实例化并移动到设备
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model  = Tc_Radar2D(ca, cls_head, difb, fusion, upsample).to(device)
-
-# —— 接下来可按常规训练流程：加载数据、定义损失/优化器、训练/验证、保存 Checkpoint —— #
-# … 以下略 …
-
-
-
-# 移动模型到计算设备
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = DetectNoFS2DModel(
-    ca=ca_module,
-    cls_head=cls_head_module,
-    difb=difb_module,
-    fusion=fusion_module,
-    upsample=upsample_module
-).to(device)
-
-# 准备数据集（示例：使用随机数据，实际项目请替换为真实数据集）
-dataset = TensorDataset(
-    torch.randn(100, 3, 224, 224),
-    torch.randint(0, 10, (100,))
-)
-train_size = int(0.8 * len(dataset))
-val_size = len(dataset) - train_size
-train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=config['batch_size'])
-
-# 定义损失函数和优化器
-criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=config['learning_rate'])
-
-# 根据配置的模块组合动态生成日志目录
-module_combination_name = f"{config['DIFB']}_{config['feature_fusion']}_{config['upsample']}"
-log_dir = os.path.join('logs', module_combination_name)
-os.makedirs(log_dir, exist_ok=True)
-
-# 训练循环
-for epoch in range(config['num_epochs']):
+# —— 单个训练周期函数 —— #
+def train_epoch(model: nn.Module, dataloader, criterion, optimizer, device: torch.device) -> float:
     model.train()
-    total_loss = 0.0
-    for images, labels in train_loader:
-        images, labels = images.to(device), labels.to(device)
-        outputs = model(images)
+    running_loss = 0.0
+    for imgs, labels in dataloader:
+        imgs, labels = imgs.to(device), labels.to(device)
+        outputs = model(imgs)
         loss = criterion(outputs, labels)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        total_loss += loss.item()
+        running_loss += loss.item()
+    return running_loss
 
-    # 简单验证过程（计算验证集准确率作为示例）
+# —— 验证并收集预测结果函数 —— #
+def validate(model: nn.Module, dataloader, device: torch.device):
     model.eval()
-    correct = 0
-    total = 0
+    y_true, y_pred = [], []
     with torch.no_grad():
-        for images, labels in val_loader:
-            images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            _, predicted = torch.max(outputs, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-    val_acc = correct / total if total > 0 else 0
-    print(f"Epoch [{epoch + 1}/{config['num_epochs']}], Loss: {total_loss:.4f}, Validation Accuracy: {val_acc:.4f}")
+        for imgs, labels in dataloader:
+            imgs, labels = imgs.to(device), labels.to(device)
+            outputs = model(imgs)
+            _, preds = torch.max(outputs, 1)
+            y_true.extend(labels.cpu().tolist())
+            y_pred.extend(preds.cpu().tolist())
+    acc = sum(t == p for t, p in zip(y_true, y_pred)) / len(y_true) if y_true else 0
+    return acc, y_true, y_pred
 
-    # 保存检查点，文件名包含模块组合和轮数
-    ckpt_filename = f"ckpt_epoch{epoch + 1}.pth"
-    ckpt_path = os.path.join(log_dir, ckpt_filename)
-    torch.save({
-        'epoch': epoch + 1,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'config': config
-    }, ckpt_path)
-    print(f"Saved checkpoint: {ckpt_path}")
+# —— 绘图与指标记录函数 —— #
+def log_and_plot_metrics(y_true: list, y_pred: list, classes: list, save_dir: str):
+    report = classification_report(y_true, y_pred, target_names=classes, digits=4)
+    print(report)
+    with open(os.path.join(save_dir, 'classification_report.txt'), 'w') as f:
+        f.write(report)
+
+    cm = confusion_matrix(y_true, y_pred)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=classes)
+    fig, ax = plt.subplots(figsize=(8, 8))
+    disp.plot(ax=ax, cmap='Blues', colorbar=False)
+    plt.title('Confusion Matrix')
+    fig.savefig(os.path.join(save_dir, 'confusion_matrix.png'))
+    plt.close(fig)
+
+# —— 主函数 —— #
+def main():
+    # 1. 读取配置
+    config = load_config('config/config2D.yaml')
+    blocks_cfg = config['blocks']
+    model_cfg = config['model']
+
+    # 2. 解析数值型配置，避免字符串类型
+    batch_size = int(model_cfg['batch_size'])
+    num_epochs = int(model_cfg['num_epochs'])
+    learning_rate = float(model_cfg['learning_rate'])
+    num_classes = int(model_cfg['num_classes'])
+
+    # 3. 初始化模块注册器与设备
+    mreg = ModuleRegister(blocks_cfg)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # 4. 构造模型
+    model = build_model(mreg, model_cfg, device)
+
+    # 5. 准备数据
+    train_loader, val_loader = load_data(batch_size, num_classes)
+
+    # 6. 损失和优化器
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+    # 7. 日志目录
+    combo = f"{blocks_cfg['DIFB']}_{blocks_cfg['feature_fusion']}_{blocks_cfg['upsample']}"
+    log_dir = os.path.join('logs', combo)
+    os.makedirs(log_dir, exist_ok=True)
+
+    # 8. 训练与验证循环
+    train_losses, val_accs = [], []
+    all_val_true, all_val_pred = [], []
+    classes = [str(i) for i in range(num_classes)]
+
+    for epoch in range(1, num_epochs + 1):
+        loss = train_epoch(model, train_loader, criterion, optimizer, device)
+        acc, y_true, y_pred = validate(model, val_loader, device)
+        train_losses.append(loss)
+        val_accs.append(acc)
+        all_val_true, all_val_pred = y_true, y_pred
+
+        print(f"Epoch [{epoch}/{num_epochs}], Loss: {loss:.4f}, Val Acc: {acc:.4f}")
+
+        # 保存 checkpoint
+        ckpt = {
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'config': config,
+            'device': str(device)
+        }
+        ckpt_path = os.path.join(log_dir, f"ckpt_epoch{epoch}.pth")
+        torch.save(ckpt, ckpt_path)
+        print(f"Checkpoint saved to {ckpt_path}")
+
+    # 9. 绘制训练曲线
+    plt.figure()
+    plt.plot(range(1, num_epochs + 1), train_losses)
+    plt.xlabel('Epoch')
+    plt.ylabel('Training Loss')
+    plt.title('Loss Curve')
+    plt.savefig(os.path.join(log_dir, 'loss_curve.png'))
+    plt.close()
+
+    plt.figure()
+    plt.plot(range(1, num_epochs + 1), val_accs)
+    plt.xlabel('Epoch')
+    plt.ylabel('Validation Accuracy')
+    plt.title('Accuracy Curve')
+    plt.savefig(os.path.join(log_dir, 'accuracy_curve.png'))
+    plt.close()
+
+    # 10. 输出分类报告与混淆矩阵
+    log_and_plot_metrics(all_val_true, all_val_pred, classes, log_dir)
+
+if __name__ == '__main__':
+    main()

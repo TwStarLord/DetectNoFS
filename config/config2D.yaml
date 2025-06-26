@@ -1,3 +1,18 @@
+model:
+  batch_size: 64
+  learning_rate: 1e-5
+  num_epochs: 100
+
+  hidden_dim: 96
+  layers: (2,2,6,2)
+  heads: (3,6,12,24)
+  channels: 3
+  num_classes: 5
+  head_dim: 32
+  window_size: 7
+  downscaling_factors: (4, 2, 2, 2)
+  relative_pos_embedding: True
+
 blocks:
   #  ca start
   ca: "MutilHeadCrossAttentionBlock"
@@ -20,7 +35,7 @@ blocks:
   #  DIFB end
 
   #  feature_fusion start
-  feature_fusion: "AFFFeatureFsuion"
+  feature_fusion: "AFFFeatureFusion"
 #  feature_fusion: "ConvFeatureFsuion"
   # feature_fusion end
 

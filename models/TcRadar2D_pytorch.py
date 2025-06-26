@@ -4,7 +4,7 @@ import numpy as np
 from einops import rearrange
 import torch.nn.functional as F
 
-from blocks.DIFB.DIFB2D import DIFB2D, DIFB2D_v1
+# from blocks.DIFB.DIFB2D import DIFB2D, DIFB2D_v1
 from blocks.ca.MutilHeadCrossAttentionBlock import MutilHeadCrossAttentionBlock
 from blocks.cls_head.GeMClassifier import GeMClassifier
 from blocks.cls_head.LiteTransformerPoolCls import LiteTransformerPoolCls
@@ -270,19 +270,19 @@ class Tc_Radar2D(nn.Module):
         # 1. DIFB 模块，v1配置参考上述代码
         self.difb1 = self.mreg.build_from_config(
             category='DIFB',
-            hidden_dim=hidden_dim
+            in_chans=hidden_dim
         )
         self.difb2 = self.mreg.build_from_config(
             category='DIFB',
-            hidden_dim=hidden_dim * 2
+            in_chans=hidden_dim * 2
         )
         self.difb3 = self.mreg.build_from_config(
             category='DIFB',
-            hidden_dim=hidden_dim * 4
+            in_chans=hidden_dim * 4
         )
         self.difb4 = self.mreg.build_from_config(
             category='DIFB',
-            hidden_dim=hidden_dim * 8
+            in_chans=hidden_dim * 8
         )
 
         # 2. 特征融合模块
@@ -298,19 +298,15 @@ class Tc_Radar2D(nn.Module):
 
         self.fusion1 = self.mreg.build_from_config(
             category='feature_fusion',
-            channels=hidden_dim
         )
         self.fusion2 = self.mreg.build_from_config(
             category='feature_fusion',
-            channels=hidden_dim * 2
         )
         self.fusion3 = self.mreg.build_from_config(
             category='feature_fusion',
-            channels=hidden_dim * 4
         )
         self.fusion4 = self.mreg.build_from_config(
             category='feature_fusion',
-            channels=hidden_dim * 8
         )
 
         # 3. 交叉注意力模块

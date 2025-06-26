@@ -3,7 +3,7 @@ from torch import nn
 
 
 class AFFFeatureFusion(nn.Module):
-    def __init__(self, ch):
+    def __init__(self):
         super().__init__()
         self.alpha = torch.sigmoid(nn.Parameter(torch.zeros(1)))
     def forward(self, feat_trans, feat_difb):
